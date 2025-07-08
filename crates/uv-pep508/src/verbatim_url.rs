@@ -18,11 +18,16 @@ use uv_redacted::DisplaySafeUrl;
 use crate::Pep508Url;
 
 /// A wrapper around [`Url`] that preserves the original string.
+///
+/// The original string is not preserved after serialization/deserialization.
 #[derive(Debug, Clone, Eq)]
 pub struct VerbatimUrl {
     /// The parsed URL.
     url: DisplaySafeUrl,
     /// The URL as it was provided by the user.
+    ///
+    /// Even if originally set, this will be [`None`] after
+    /// serialization/deserialization.
     given: Option<ArcStr>,
 }
 
@@ -106,10 +111,8 @@ impl VerbatimUrl {
         let (path, fragment) = split_fragment(&path);
 
         // Convert to a URL.
-        let mut url = DisplaySafeUrl::from(
-            Url::from_file_path(path.clone())
-                .unwrap_or_else(|()| panic!("path is absolute: {}", path.display())),
-        );
+        let mut url = DisplaySafeUrl::from_file_path(path.clone())
+            .unwrap_or_else(|()| panic!("path is absolute: {}", path.display()));
 
         // Set the fragment, if it exists.
         if let Some(fragment) = fragment {
@@ -166,6 +169,11 @@ impl VerbatimUrl {
     /// Return the underlying [`DisplaySafeUrl`].
     pub fn raw(&self) -> &DisplaySafeUrl {
         &self.url
+    }
+
+    /// Return a mutable reference to the underlying [`DisplaySafeUrl`].
+    pub fn raw_mut(&mut self) -> &mut DisplaySafeUrl {
+        &mut self.url
     }
 
     /// Convert a [`VerbatimUrl`] into a [`DisplaySafeUrl`].

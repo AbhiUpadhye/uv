@@ -41,6 +41,7 @@ pub(crate) struct Tools {
 #[derive(Debug, Clone, Default, Deserialize, CombineOptions, OptionsMetadata)]
 #[serde(from = "OptionsWire", rename_all = "kebab-case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schemars", schemars(!from))]
 pub struct Options {
     #[serde(flatten)]
     pub globals: GlobalOptions,
@@ -139,6 +140,9 @@ pub struct Options {
 
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub default_groups: Option<serde::de::IgnoredAny>,
+
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    pub dependency_groups: Option<serde::de::IgnoredAny>,
 
     #[cfg_attr(feature = "schemars", schemars(skip))]
     pub managed: Option<serde::de::IgnoredAny>,
@@ -1495,7 +1499,7 @@ pub struct PipOptions {
     /// Hash-checking mode introduces a number of additional constraints:
     ///
     /// - Git dependencies are not supported.
-    /// - Editable installs are not supported.
+    /// - Editable installations are not supported.
     /// - Local dependencies are not supported, unless they point to a specific wheel (`.whl`) or
     ///   source archive (`.zip`, `.tar.gz`), as opposed to a directory.
     #[option(
@@ -1870,6 +1874,7 @@ pub struct OptionsWire {
     managed: Option<serde::de::IgnoredAny>,
     r#package: Option<serde::de::IgnoredAny>,
     default_groups: Option<serde::de::IgnoredAny>,
+    dependency_groups: Option<serde::de::IgnoredAny>,
     dev_dependencies: Option<serde::de::IgnoredAny>,
 
     // Build backend
@@ -1934,6 +1939,7 @@ impl From<OptionsWire> for Options {
             workspace,
             sources,
             default_groups,
+            dependency_groups,
             dev_dependencies,
             managed,
             package,
@@ -2010,6 +2016,7 @@ impl From<OptionsWire> for Options {
             sources,
             dev_dependencies,
             default_groups,
+            dependency_groups,
             managed,
             package,
         }

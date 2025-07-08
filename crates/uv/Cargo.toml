@@ -1,6 +1,6 @@
 [package]
 name = "uv"
-version = "0.7.11"
+version = "0.7.19"
 edition = { workspace = true }
 rust-version = { workspace = true }
 homepage = { workspace = true }
@@ -70,10 +70,12 @@ clap = { workspace = true, features = ["derive", "string", "wrap_help"] }
 console = { workspace = true }
 ctrlc = { workspace = true }
 dotenvy = { workspace = true }
+dunce = { workspace = true }
 flate2 = { workspace = true, default-features = false }
 fs-err = { workspace = true, features = ["tokio"] }
 futures = { workspace = true }
 http = { workspace = true }
+indexmap = { workspace = true }
 indicatif = { workspace = true }
 indoc = { workspace = true }
 itertools = { workspace = true }
@@ -112,7 +114,6 @@ assert_cmd = { version = "2.0.16" }
 assert_fs = { version = "1.1.2" }
 base64 = { workspace = true }
 byteorder = { version = "1.5.0" }
-etcetera = { workspace = true }
 filetime = { version = "0.2.25" }
 flate2 = { workspace = true, default-features = false }
 ignore = { version = "0.4.23" }

@@ -14,6 +14,7 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use std::path::Path;
+use url::Url;
 use uv_fs::Simplified;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
@@ -488,6 +489,88 @@ fn add_git_private_raw() -> Result<()> {
 
     ----- stderr -----
     Audited 1 package in [TIME]
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "git")]
+async fn add_git_private_rate_limited_by_github_rest_api_403_response() -> Result<()> {
+    let context = TestContext::new("3.12");
+    let token = decode_token(READ_ONLY_GITHUB_TOKEN);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context
+        .add()
+        .arg(format!("uv-private-pypackage @ git+https://{token}@github.com/astral-test/uv-private-pypackage"))
+        .env("UV_GITHUB_FAST_PATH_URL", server.uri()), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + uv-private-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-private-pypackage@d780faf0ac91257d4d5a4f0c5a0e4509608c0071)
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "git")]
+async fn add_git_private_rate_limited_by_github_rest_api_429_response() -> Result<()> {
+    use uv_client::DEFAULT_RETRIES;
+
+    let context = TestContext::new("3.12");
+    let token = decode_token(READ_ONLY_GITHUB_TOKEN);
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(429))
+        .expect(1 + u64::from(DEFAULT_RETRIES)) // Middleware retries on 429 by default
+        .mount(&server)
+        .await;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context
+        .add()
+        .arg(format!("uv-private-pypackage @ git+https://{token}@github.com/astral-test/uv-private-pypackage"))
+        .env("UV_GITHUB_FAST_PATH_URL", server.uri()), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + uv-private-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-private-pypackage@d780faf0ac91257d4d5a4f0c5a0e4509608c0071)
     ");
 
     Ok(())
@@ -2009,6 +2092,42 @@ fn remove_both_dev() -> Result<()> {
         "###
         );
     });
+
+    Ok(())
+}
+
+/// Do not allow add for groups in scripts.
+#[test]
+fn disallow_group_script_add() -> Result<()> {
+    let context = TestContext::new("3.12");
+
+    let script = context.temp_dir.child("main.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.13"
+        # dependencies = []
+        #
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context
+        .add()
+        .arg("--group")
+        .arg("dev")
+        .arg("anyio==3.7.0")
+        .arg("--script")
+        .arg("main.py"), @r###"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: the argument '--group <GROUP>' cannot be used with '--script <SCRIPT>'
+
+    Usage: uv add --cache-dir [CACHE_DIR] --group <GROUP> --exclude-newer <EXCLUDE_NEWER> <PACKAGES|--requirements <REQUIREMENTS>>
+
+    For more information, try '--help'.
+    "###);
 
     Ok(())
 }
@@ -4255,7 +4374,7 @@ fn add_lower_bound_local() -> Result<()> {
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            pyproject_toml, @r###"
+            pyproject_toml, @r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -4265,8 +4384,8 @@ fn add_lower_bound_local() -> Result<()> {
         ]
 
         [[tool.uv.index]]
-        url = "https://astral-sh.github.io/packse/PACKSE_VERSION/simple-html/"
-        "###
+        url = "https://astral-sh.github.io/packse/PACKSE_VERSION/simple-html"
+        "#
         );
     });
 
@@ -4284,7 +4403,7 @@ fn add_lower_bound_local() -> Result<()> {
         [[package]]
         name = "local-simple-a"
         version = "1.2.3+foo"
-        source = { registry = "https://astral-sh.github.io/packse/PACKSE_VERSION/simple-html/" }
+        source = { registry = "https://astral-sh.github.io/packse/PACKSE_VERSION/simple-html" }
         sdist = { url = "https://astral-sh.github.io/packse/PACKSE_VERSION/files/local_simple_a-1.2.3+foo.tar.gz", hash = "sha256:ebd55c4a79d0a5759126657cb289ff97558902abcfb142e036b993781497edac" }
         wheels = [
             { url = "https://astral-sh.github.io/packse/PACKSE_VERSION/files/local_simple_a-1.2.3+foo-py3-none-any.whl", hash = "sha256:6f30e2e709b3e171cd734bb58705229a582587c29e0a7041227435583c7224cc" },
@@ -7127,10 +7246,7 @@ fn fail_to_add_revert_project() -> Result<()> {
         .child("setup.py")
         .write_str("1/0")?;
 
-    let filters = std::iter::once((r"exit code: 1", "exit status: 1"))
-        .chain(context.filters())
-        .collect::<Vec<_>>();
-    uv_snapshot!(filters, context.add().arg("./child"), @r#"
+    uv_snapshot!(context.filters(), context.add().arg("./child"), @r#"
     success: false
     exit_code: 1
     ----- stdout -----
@@ -7232,10 +7348,7 @@ fn fail_to_edit_revert_project() -> Result<()> {
         .child("setup.py")
         .write_str("1/0")?;
 
-    let filters = std::iter::once((r"exit code: 1", "exit status: 1"))
-        .chain(context.filters())
-        .collect::<Vec<_>>();
-    uv_snapshot!(filters, context.add().arg("./child"), @r#"
+    uv_snapshot!(context.filters(), context.add().arg("./child"), @r#"
     success: false
     exit_code: 1
     ----- stdout -----
@@ -7956,7 +8069,7 @@ fn add_shadowed_name() -> Result<()> {
     "###);
 
     // Constraint with several available versions, check for an indirect dependency loop.
-    uv_snapshot!(context.filters(), context.add().arg("dagster-webserver>=1.6.11,<1.7.0"), @r###"
+    uv_snapshot!(context.filters(), context.add().arg("dagster-webserver>=1.6.11,<1.7.0"), @r"
     success: false
     exit_code: 1
     ----- stdout -----
@@ -7964,21 +8077,16 @@ fn add_shadowed_name() -> Result<()> {
     ----- stderr -----
       × No solution found when resolving dependencies:
       ╰─▶ Because only the following versions of dagster-webserver are available:
-              dagster-webserver<=1.6.13
-              dagster-webserver>1.7.0
-          and dagster-webserver==1.6.11 depends on your project, we can conclude that all of:
-              dagster-webserver>=1.6.11,<1.6.12
-              dagster-webserver>1.6.13,<1.7.0
-          depend on your project.
-          And because dagster-webserver==1.6.12 depends on your project, we can conclude that all of:
-              dagster-webserver>=1.6.11,<1.6.13
-              dagster-webserver>1.6.13,<1.7.0
-          depend on your project.
-          And because dagster-webserver==1.6.13 depends on your project and your project depends on dagster-webserver>=1.6.11,<1.7.0, we can conclude that your project's requirements are unsatisfiable.
+              dagster-webserver<=1.6.11
+              dagster-webserver==1.6.12
+              dagster-webserver==1.6.13
+          and dagster-webserver==1.6.11 depends on your project, we can conclude that dagster-webserver>=1.6.11,<1.6.12 depends on your project.
+          And because dagster-webserver==1.6.12 depends on your project, we can conclude that dagster-webserver>=1.6.11,<1.6.13 depends on your project.
+          And because dagster-webserver==1.6.13 depends on your project and your project depends on dagster-webserver>=1.6.11, we can conclude that your project's requirements are unsatisfiable.
 
           hint: The package `dagster-webserver` depends on the package `dagster` but the name is shadowed by your project. Consider changing the name of the project.
       help: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing.
-    "###);
+    ");
 
     Ok(())
 }
@@ -8073,7 +8181,7 @@ fn add_warn_index_url() -> Result<()> {
     ----- stderr -----
     warning: Indexes specified via `--extra-index-url` will not be persisted to the `pyproject.toml` file; use `--index` instead.
       × No solution found when resolving dependencies:
-      ╰─▶ Because only idna<3.6 is available and your project depends on idna>=3.6, we can conclude that your project's requirements are unsatisfiable.
+      ╰─▶ Because only idna==2.7 is available and your project depends on idna>=3.6, we can conclude that your project's requirements are unsatisfiable.
 
           hint: `idna` was found on https://test.pypi.org/simple, but not at the requested version (idna>=3.6). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
       help: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing.
@@ -9151,7 +9259,7 @@ fn add_index_with_trailing_slash() -> Result<()> {
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            pyproject_toml, @r###"
+            pyproject_toml, @r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -9164,8 +9272,8 @@ fn add_index_with_trailing_slash() -> Result<()> {
         constraint-dependencies = ["markupsafe<3"]
 
         [[tool.uv.index]]
-        url = "https://pypi.org/simple/"
-        "###
+        url = "https://pypi.org/simple"
+        "#
         );
     });
 
@@ -9189,7 +9297,7 @@ fn add_index_with_trailing_slash() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://pypi.org/simple/" }
+        source = { registry = "https://pypi.org/simple" }
         sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
         wheels = [
             { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
@@ -9304,6 +9412,177 @@ fn add_index_without_trailing_slash() -> Result<()> {
         "#
         );
     });
+
+    Ok(())
+}
+
+/// Add an index with an existing relative path.
+#[test]
+fn add_index_with_existing_relative_path_index() -> Result<()> {
+    let context = TestContext::new("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    // Create test-index/ subdirectory and copy our "offline" tqdm wheel there
+    let packages = context.temp_dir.child("test-index");
+    packages.create_dir_all()?;
+
+    let wheel_src = context
+        .workspace_root
+        .join("scripts/links/ok-1.0.0-py3-none-any.whl");
+    let wheel_dst = packages.child("ok-1.0.0-py3-none-any.whl");
+    fs_err::copy(&wheel_src, &wheel_dst)?;
+
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--index").arg("./test-index"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+/// Add an index with a non-existent relative path.
+#[test]
+fn add_index_with_non_existent_relative_path() -> Result<()> {
+    let context = TestContext::new("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--index").arg("./test-index"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Directory not found for index: file://[TEMP_DIR]/test-index
+    ");
+
+    Ok(())
+}
+
+/// Add an index with a non-existent relative path with the same name as a defined index.
+#[test]
+fn add_index_with_non_existent_relative_path_with_same_name_as_index() -> Result<()> {
+    let context = TestContext::new("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "test-index"
+        url = "https://pypi-proxy.fly.dev/simple"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--index").arg("./test-index"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Directory not found for index: file://[TEMP_DIR]/test-index
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn add_index_empty_directory() -> Result<()> {
+    let context = TestContext::new("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "test-index"
+        url = "https://pypi-proxy.fly.dev/simple"
+    "#})?;
+
+    let packages = context.temp_dir.child("test-index");
+    packages.create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--index").arg("./test-index"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Index directory `file://[TEMP_DIR]/test-index` is empty, skipping
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn add_index_with_ambiguous_relative_path() -> Result<()> {
+    let context = TestContext::new("3.12");
+    let mut filters = context.filters();
+    filters.push((r"\./|\.\\\\", r"[PREFIX]"));
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    #[cfg(unix)]
+    uv_snapshot!(filters, context.add().arg("iniconfig").arg("--index").arg("test-index"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Relative paths passed to `--index` or `--default-index` should be disambiguated from index names (use `[PREFIX]test-index`). Support for ambiguous values will be removed in the future
+    error: Directory not found for index: file://[TEMP_DIR]/test-index
+    ");
+
+    #[cfg(windows)]
+    uv_snapshot!(filters, context.add().arg("iniconfig").arg("--index").arg("test-index"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Relative paths passed to `--index` or `--default-index` should be disambiguated from index names (use `[PREFIX]test-index` or `[PREFIX]test-index`). Support for ambiguous values will be removed in the future
+    error: Directory not found for index: file://[TEMP_DIR]/test-index
+    ");
 
     Ok(())
 }
@@ -10915,7 +11194,7 @@ fn repeated_index_cli_reversed() -> Result<()> {
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            pyproject_toml, @r###"
+            pyproject_toml, @r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -10925,8 +11204,8 @@ fn repeated_index_cli_reversed() -> Result<()> {
         ]
 
         [[tool.uv.index]]
-        url = "https://test.pypi.org/simple/"
-        "###
+        url = "https://test.pypi.org/simple"
+        "#
         );
     });
 
@@ -10947,7 +11226,7 @@ fn repeated_index_cli_reversed() -> Result<()> {
         [[package]]
         name = "iniconfig"
         version = "2.0.0"
-        source = { registry = "https://test.pypi.org/simple/" }
+        source = { registry = "https://test.pypi.org/simple" }
         sdist = { url = "https://test-files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:16.826Z" }
         wheels = [
             { url = "https://test-files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:14.843Z" },
@@ -11327,11 +11606,6 @@ fn add_missing_package_on_pytorch() -> Result<()> {
 #[tokio::test]
 async fn add_unexpected_error_code() -> Result<()> {
     let context = TestContext::new("3.12");
-    let filters = context
-        .filters()
-        .into_iter()
-        .chain([(r"127\.0\.0\.1(?::\d+)?", "[LOCALHOST]")])
-        .collect::<Vec<_>>();
 
     let server = MockServer::start().await;
 
@@ -11350,13 +11624,14 @@ async fn add_unexpected_error_code() -> Result<()> {
         "#
     })?;
 
-    uv_snapshot!(filters, context.add().arg("anyio").arg("--index").arg(server.uri()), @r"
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--index").arg(server.uri()), @r"
     success: false
     exit_code: 2
     ----- stdout -----
 
     ----- stderr -----
-    error: Failed to fetch: `http://[LOCALHOST]/anyio/`
+    error: Request failed after 3 retries
+      Caused by: Failed to fetch: `http://[LOCALHOST]/anyio/`
       Caused by: HTTP status server error (503 Service Unavailable) for url (http://[LOCALHOST]/anyio/)
     "
     );
@@ -11682,6 +11957,255 @@ fn add_auth_policy_never_without_credentials() -> Result<()> {
 
     context.assert_command("import anyio").success();
     Ok(())
+}
+
+/// If uv receives a 302 redirect to a cross-origin server, it should not forward
+/// credentials. In the absence of a netrc entry for the new location,
+/// it should fail.
+#[tokio::test]
+async fn add_redirect_cross_origin() -> Result<()> {
+    let context = TestContext::new("3.12");
+    let filters = context
+        .filters()
+        .into_iter()
+        .chain([(r"127\.0\.0\.1:\d*", "[LOCALHOST]")])
+        .collect::<Vec<_>>();
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#
+    })?;
+
+    let redirect_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(|req: &wiremock::Request| {
+            let redirect_url = redirect_url_to_pypi_proxy(req);
+            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
+        })
+        .mount(&redirect_server)
+        .await;
+
+    let mut redirect_url = Url::parse(&redirect_server.uri())?;
+    let _ = redirect_url.set_username("public");
+    let _ = redirect_url.set_password(Some("heron"));
+
+    uv_snapshot!(filters, context.add().arg("--default-index").arg(redirect_url.as_str()).arg("anyio"), @r"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+      × No solution found when resolving dependencies:
+      ╰─▶ Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
+
+          hint: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized).
+      help: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing.
+    "
+    );
+
+    Ok(())
+}
+
+/// If uv receives a 302 redirect to a cross-origin server with credentials
+/// in the location, use those credentials for the redirect request.
+#[tokio::test]
+async fn add_redirect_cross_origin_credentials_in_location() -> Result<()> {
+    let context = TestContext::new("3.12");
+    let filters = context
+        .filters()
+        .into_iter()
+        .chain([(r"127\.0\.0\.1:\d*", "[LOCALHOST]")])
+        .collect::<Vec<_>>();
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#
+    })?;
+
+    let redirect_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(|req: &wiremock::Request| {
+            // Responds with credentials in the location
+            let redirect_url = redirect_url_to_base(
+                req,
+                "https://public:heron@pypi-proxy.fly.dev/basic-auth/simple/",
+            );
+            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
+        })
+        .mount(&redirect_server)
+        .await;
+
+    let redirect_url = Url::parse(&redirect_server.uri())?;
+
+    uv_snapshot!(filters, context.add().arg("--default-index").arg(redirect_url.as_str()).arg("anyio"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
+    "
+    );
+
+    Ok(())
+}
+
+/// uv currently fails to look up keyring credentials on a cross-origin redirect.
+#[tokio::test]
+async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
+    let keyring_context = TestContext::new("3.12");
+
+    // Install our keyring plugin
+    keyring_context
+        .pip_install()
+        .arg(
+            keyring_context
+                .workspace_root
+                .join("scripts")
+                .join("packages")
+                .join("keyring_test_plugin"),
+        )
+        .assert()
+        .success();
+
+    let context = TestContext::new("3.12");
+    let filters = context
+        .filters()
+        .into_iter()
+        .chain([(r"127\.0\.0\.1:\d*", "[LOCALHOST]")])
+        .collect::<Vec<_>>();
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        keyring-provider = "subprocess"
+        "#,
+    })?;
+
+    let redirect_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(|req: &wiremock::Request| {
+            let redirect_url = redirect_url_to_pypi_proxy(req);
+            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
+        })
+        .mount(&redirect_server)
+        .await;
+
+    let mut redirect_url = Url::parse(&redirect_server.uri())?;
+    let _ = redirect_url.set_username("public");
+
+    uv_snapshot!(filters, context.add().arg("--default-index")
+        .arg(redirect_url.as_str())
+        .arg("anyio")
+        .env(EnvVars::KEYRING_TEST_CREDENTIALS, r#"{"pypi-proxy.fly.dev": {"public": "heron"}}"#)
+        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @r"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+
+    ----- stderr -----
+    Keyring request for public@http://[LOCALHOST]/
+    Keyring request for public@[LOCALHOST]
+      × No solution found when resolving dependencies:
+      ╰─▶ Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
+
+          hint: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized).
+      help: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing.
+    "
+    );
+
+    Ok(())
+}
+
+/// If uv receives a cross-origin 302 redirect, it should use credentials from netrc
+/// for the new location.
+#[tokio::test]
+async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
+    let context = TestContext::new("3.12");
+    let filters = context
+        .filters()
+        .into_iter()
+        .chain([(r"127\.0\.0\.1:\d*", "[LOCALHOST]")])
+        .collect::<Vec<_>>();
+
+    let netrc = context.temp_dir.child(".netrc");
+    netrc.write_str("machine pypi-proxy.fly.dev login public password heron")?;
+
+    let redirect_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .respond_with(|req: &wiremock::Request| {
+            let redirect_url = redirect_url_to_pypi_proxy(req);
+            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
+        })
+        .mount(&redirect_server)
+        .await;
+
+    let mut redirect_url = Url::parse(&redirect_server.uri())?;
+    let _ = redirect_url.set_username("public");
+
+    uv_snapshot!(filters, context.pip_install()
+        .arg("anyio")
+        .arg("--index-url")
+        .arg(redirect_url.as_str())
+        .env(EnvVars::NETRC, netrc.to_str().unwrap())
+        .arg("--strict"), @r###"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
+    "###
+    );
+
+    context.assert_command("import anyio").success();
+
+    Ok(())
+}
+
+fn redirect_url_to_pypi_proxy(req: &wiremock::Request) -> String {
+    redirect_url_to_base(req, "https://pypi-proxy.fly.dev/basic-auth/simple/")
+}
+
+fn redirect_url_to_base(req: &wiremock::Request, base: &str) -> String {
+    let last_path_segment = req
+        .url
+        .path_segments()
+        .expect("path has segments")
+        .filter(|segment| !segment.is_empty())
+        .next_back()
+        .expect("path has a package segment");
+    format!("{base}{last_path_segment}/")
 }
 
 /// Test the error message when adding a package with multiple existing references in
